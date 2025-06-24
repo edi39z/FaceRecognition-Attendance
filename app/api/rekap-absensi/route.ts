@@ -7,6 +7,7 @@ import timezone from "dayjs/plugin/timezone"
 import isSameOrBefore from "dayjs/plugin/isSameOrBefore"
 import { Workbook } from "exceljs"
 
+// Setup dayjs plugins
 dayjs.extend(isSameOrBefore)
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -26,6 +27,24 @@ export async function GET(req: Request) {
     const end = dayjs(start).endOf("month")
     const today = dayjs().tz("Asia/Jakarta")
     const endDate = end.isAfter(today) ? today : end
+
+    // Ambil pengaturan absensi
+    const pengaturan = await prisma.pengaturanAbsensi.findFirst()
+    if (!pengaturan) throw new Error("Pengaturan absensi tidak ditemukan.")
+
+    const hariKerja = pengaturan.hariKerja || []
+    const dayIndexToEnglish = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+
+    // Ambil hari libur
+    const hariLiburList = await prisma.hariLibur.findMany({
+      where: {
+        tanggal: {
+          gte: start.toDate(),
+          lte: endDate.toDate()
+        }
+      }
+    })
+    const liburMap = new Map(hariLiburList.map(l => [dayjs(l.tanggal).tz("Asia/Jakarta").format("DD MMM YYYY"), l.keterangan]))
 
     // Buat daftar tanggal dari awal sampai akhir bulan
     const allDates: string[] = []
@@ -90,22 +109,38 @@ export async function GET(req: Request) {
         { header: "No", key: "no", width: 6 },
         { header: "Tanggal", key: "tanggal", width: 15 },
         { header: "Nama", key: "nama", width: 25 },
-        { header: "Masuk", key: "masuk", width: 10 },
-        { header: "Pulang", key: "pulang", width: 10 },
+        { header: "Masuk", key: "masuk", width: 15 },
+        { header: "Pulang", key: "pulang", width: 15 },
       ]
 
       let nomor = 1
       for (const tanggal of allDates) {
+        const d = dayjs(tanggal, "DD MMM YYYY").tz("Asia/Jakarta")
+        const hari = dayIndexToEnglish[d.day()]
+
+        const isHariKerja = hariKerja.includes(hari)
+        const isLibur = liburMap.has(tanggal)
+        const keteranganLibur = liburMap.get(tanggal) || "Hari Libur"
+
         for (const karyawan of karyawanList) {
           const key = `${karyawan.id}-${tanggal}`
           const abs = absensiMap.get(key) || {}
+
+          let masuk = abs.masuk || "-"
+          let pulang = abs.pulang || "-"
+
+          if (isLibur) {
+            masuk = pulang = keteranganLibur
+          } else if (!isHariKerja) {
+            masuk = pulang = "Bukan Hari Kerja"
+          }
 
           sheet.addRow({
             no: nomor++,
             tanggal,
             nama: karyawan.nama,
-            masuk: abs.masuk || "-",
-            pulang: abs.pulang || "-",
+            masuk,
+            pulang,
           })
         }
       }
@@ -116,8 +151,7 @@ export async function GET(req: Request) {
 
     return new Response(buffer, {
       headers: {
-        "Content-Type":
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename=${filename}`,
       },
     })

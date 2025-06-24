@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { AttendanceResponse } from "@/lib/api"
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL
 const FLASK_ATTENDANCE_URL = `${BASE_URL}/attendance`
@@ -71,9 +77,17 @@ export async function POST(req: Request) {
       }, { status: 500 })
     }
 
-    const now = new Date()
-    const awalHari = new Date(now); awalHari.setHours(0, 0, 0, 0)
-    const akhirHari = new Date(now); akhirHari.setHours(23, 59, 59, 999)
+      // Gunakan waktu saat ini di Asia/Jakarta (UTC+7) untuk logika
+   const nowWIB = dayjs().tz('Asia/Jakarta')
+
+  // Tetap simpan ke database dalam bentuk Date JS biasa
+   const now = nowWIB.toDate()
+
+
+
+    const awalHari = nowWIB.startOf('day').toDate()
+    const akhirHari = nowWIB.endOf('day').toDate()
+
 
     // 🔒 Cek Hari Libur Nasional
     const liburHariIni = await prisma.hariLibur.findFirst({
@@ -118,16 +132,19 @@ export async function POST(req: Request) {
     }
 
     const formatJam = (jamStr: string) => {
-      const [h, m] = jamStr.split(':').map(Number)
-      const d = new Date(now)
-      d.setHours(h, m, 0, 0)
-      return d
-    }
+  const [h, m] = jamStr.split(':').map(Number)
+  return nowWIB.clone().hour(h).minute(m).second(0).millisecond(0).toDate()
+}
+
 
     const waktuMulaiMasuk = formatJam(pengaturan.waktuMulaiAbsen)
     const batasMasuk = formatJam(pengaturan.batasTerlambat)
     const waktuMulaiPulang = formatJam(pengaturan.waktuMulaiPulang)
     const batasPulang = formatJam(pengaturan.batasWaktuPulang)
+    console.log(now)
+    console.log(waktuMulaiMasuk)
+    console.log(batasMasuk)
+    console.log(waktuMulaiPulang)
 
     let statusAbsensi: string
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma  from "@/lib/prisma"; // Pastikan path ini benar sesuai struktur project kamu
+import prisma from "@/lib/prisma";
+import bcrypt from "bcryptjs"; // ✅ Tambahkan ini
 
 export async function PUT(req: NextRequest) {
   try {
@@ -19,10 +20,15 @@ export async function PUT(req: NextRequest) {
     };
 
     if (email?.trim()) updatedData.email = email.trim();
-    if (password) updatedData.password = password;
+
+    // ✅ Hash password jika ada
+    if (password) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updatedData.password = hashedPassword;
+    }
 
     const updatedKaryawan = await prisma.karyawan.update({
-      where: { id: Number(id) }, // pastikan id dikonversi ke number karena di Prisma id = Int
+      where: { id: Number(id) },
       data: updatedData,
     });
 
