@@ -12,24 +12,57 @@ import bcrypt
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+from urllib.parse import urlparse
+
 load_dotenv()
 
 # Inisialisasi Flask app
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Konfigurasi Database
-DB_HOST = os.environ.get("DB_HOST", "HOST")
-DB_NAME = os.environ.get("DB_NAME", "DATABASE")
-DB_USER = os.environ.get("DB_USER", "USERNAME")
-DB_PASS = os.environ.get("DB_PASS", "PASSWORD")
-
 def get_db_connection():
     try:
-        conn = psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASS)
+        # Prioritize DATABASE_URL for Neon, fallback to individual DB config variables
+        database_url = os.environ.get("DATABASE_URL")
+        
+        if database_url:
+            # Parse Neon connection string
+            print(f"[v0] Connecting to Neon database...")
+            conn = psycopg2.connect(database_url, connect_timeout=5)
+            print(f"[v0] Successfully connected to Neon database")
+        else:
+            # Fallback to localhost configuration
+            def strip_quotes(value):
+                """Remove surrounding quotes from environment variable values"""
+                if value and len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+                    return value[1:-1]
+                if value and len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+                    return value[1:-1]
+                return value
+
+            DB_HOST = strip_quotes(os.environ.get("DB_HOST", "localhost"))
+            DB_NAME = strip_quotes(os.environ.get("DB_NAME", "face_recognition"))
+            DB_USER = strip_quotes(os.environ.get("DB_USER", "postgres"))
+            DB_PASS = strip_quotes(os.environ.get("DB_PASS", "password"))
+            
+            print(f"[v0] Connecting to localhost: {DB_HOST}:{DB_NAME} with user {DB_USER}")
+            conn = psycopg2.connect(
+                host=DB_HOST, 
+                database=DB_NAME, 
+                user=DB_USER, 
+                password=DB_PASS,
+                connect_timeout=5,
+                client_encoding='UTF8'
+            )
+        
         return conn
-    except psycopg2.Error as e:
-        app.logger.error(f"Flask: Error connecting to PostgreSQL: {e}")
+    except psycopg2.OperationalError as e:
+        print(f"[v0] PostgreSQL connection error: {e}")
+        app.logger.error(f"Flask: PostgreSQL connection error: {e}")
+        return None
+    except Exception as e:
+        print(f"[v0] Unexpected error connecting to database: {e}")
+        app.logger.error(f"Flask: Unexpected error: {e}")
         return None
 
 def sanitize_filename(name):
@@ -170,40 +203,88 @@ def login():
     email = data.get('email')
     password = data.get('password')
 
-    admin_email = os.getenv('ADMIN_EMAIL')
-    admin_password = os.getenv('ADMIN_PASSWORD')
+    def strip_quotes(value):
+        """Remove surrounding quotes from environment variable values"""
+        if value and len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            return value[1:-1]
+        if value and len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+            return value[1:-1]
+        return value
 
+    admin_email = strip_quotes(os.getenv('ADMIN_EMAIL', ''))
+    admin_password = strip_quotes(os.getenv('ADMIN_PASSWORD', ''))
+
+    # Check admin credentials first
     if email == admin_email and password == admin_password:
+        print(f"[v0] Admin login successful for {email}")
         return jsonify({"message": "Login berhasil", "role": "admin"}), 200
 
+    # Check user credentials from database
     conn = get_db_connection()
     if conn is None:
+        print(f"[v0] Database connection failed for user {email}")
         return jsonify({"error": "Tidak bisa konek ke database"}), 503
 
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        # Query user from Karyawan table
         cursor.execute("""
-            SELECT nama, password FROM public."Karyawan"
+            SELECT nama, password, email FROM public."Karyawan"
             WHERE email = %s
         """, (email,))
         row = cursor.fetchone()
 
         if row:
-            nama, hashed_password = row
+            nama = row['nama']
+            hashed_password = row['password']
 
-            if bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8')):
-                return jsonify({
-                    "message": "Login berhasil",
-                    "role": "user",
-                    "nama": nama
-                }), 200
-            else:
+            try:
+                if hashed_password is None:
+                    print(f"[v0] No password found for user {email}")
+                    return jsonify({"message": "Email atau password salah"}), 401
+                
+                # Ensure password is properly encoded
+                password_bytes = password.encode('utf-8')
+                
+                # Handle both string and bytes password hashes
+                if isinstance(hashed_password, str):
+                    hashed_password_bytes = hashed_password.encode('utf-8')
+                else:
+                    hashed_password_bytes = hashed_password
+                
+                print(f"[v0] Attempting login for user: {email}")
+                print(f"[v0] Password hash type: {type(hashed_password_bytes)}, Length: {len(hashed_password_bytes)}")
+                
+                if bcrypt.checkpw(password_bytes, hashed_password_bytes):
+                    print(f"[v0] User login successful: {email}")
+                    return jsonify({
+                        "message": "Login berhasil",
+                        "role": "user",
+                        "nama": nama
+                    }), 200
+                else:
+                    print(f"[v0] Password mismatch for user: {email}")
+                    return jsonify({"message": "Email atau password salah"}), 401
+            except ValueError as ve:
+                print(f"[v0] Bcrypt ValueError for {email}: {str(ve)}")
+                app.logger.error(f"Bcrypt ValueError: {str(ve)}")
+                return jsonify({"message": "Email atau password salah"}), 401
+            except Exception as e:
+                print(f"[v0] Password verification error for {email}: {str(e)}")
+                app.logger.error(f"Password verification error: {str(e)}")
                 return jsonify({"message": "Email atau password salah"}), 401
         else:
+            print(f"[v0] User not found: {email}")
             return jsonify({"message": "Email atau password salah"}), 401
 
     except psycopg2.Error as db_err:
+        print(f"[v0] Database query error: {str(db_err)}")
+        app.logger.error(f"Database query error: {str(db_err)}")
         return jsonify({"error": f"Database error: {str(db_err)}"}), 500
+    except Exception as e:
+        print(f"[v0] Unexpected error in login: {str(e)}")
+        app.logger.error(f"Unexpected error in login: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
     finally:
         cursor.close()
         conn.close()

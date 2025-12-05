@@ -19,15 +19,15 @@ model CatatanAbsensi {
 }
 
 model PengaturanAbsensi {
-  id                Int      @id @default(autoincrement())
-  waktuMulaiAbsen   String
-  batasTepatWaktu   String
-  batasTerlambat    String
-  waktuMulaiPulang  String   @default("16:00") // Default checkout start time
-  batasWaktuPulang  String   @default("18:00") // Default checkout end time
-  hariKerja         String[] // array string PostgreSQL
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id               Int      @id @default(autoincrement())
+  waktuMulaiAbsen  String
+  batasTepatWaktu  String
+  batasTerlambat   String
+  hariKerja        String[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  batasWaktuPulang String   @default("18:00")
+  waktuMulaiPulang String   @default("16:00")
 
   @@map("PengaturanAbsensi")
 }
@@ -42,23 +42,19 @@ model Karyawan {
   face_embedding String?
   email          String?          @unique
   password       String?
-  status         String           @default("Guru") // New status field
+  status         String           @default("Guru")
   catatanAbsensi CatatanAbsensi[]
 
   @@map("Karyawan")
 }
 
 model HariLibur {
-  id          Int      @id @default(autoincrement())
-  tanggal     DateTime
-  keterangan  String   @default("Hari Libur")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         Int      @id @default(autoincrement())
+  tanggal    DateTime
+  keterangan String   @default("Hari Libur")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([tanggal])
   @@map("HariLibur")
 }
-
-/// We could not retrieve columns for the underlying table. Either it has none or you are missing rights to see them. Please check your privileges.
-// model admin {
-// }
