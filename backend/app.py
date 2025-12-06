@@ -27,9 +27,9 @@ def get_db_connection():
         
         if database_url:
             # Parse Neon connection string
-            print(f"[v0] Connecting to Neon database...")
+            print(f"Connecting to Neon database...")
             conn = psycopg2.connect(database_url, connect_timeout=5)
-            print(f"[v0] Successfully connected to Neon database")
+            print(f"Successfully connected to Neon database")
         else:
             # Fallback to localhost configuration
             def strip_quotes(value):
@@ -45,7 +45,7 @@ def get_db_connection():
             DB_USER = strip_quotes(os.environ.get("DB_USER", "postgres"))
             DB_PASS = strip_quotes(os.environ.get("DB_PASS", "password"))
             
-            print(f"[v0] Connecting to localhost: {DB_HOST}:{DB_NAME} with user {DB_USER}")
+            print(f"Connecting to localhost: {DB_HOST}:{DB_NAME} with user {DB_USER}")
             conn = psycopg2.connect(
                 host=DB_HOST, 
                 database=DB_NAME, 
@@ -57,11 +57,11 @@ def get_db_connection():
         
         return conn
     except psycopg2.OperationalError as e:
-        print(f"[v0] PostgreSQL connection error: {e}")
+        print(f" PostgreSQL connection error: {e}")
         app.logger.error(f"Flask: PostgreSQL connection error: {e}")
         return None
     except Exception as e:
-        print(f"[v0] Unexpected error connecting to database: {e}")
+        print(f" Unexpected error connecting to database: {e}")
         app.logger.error(f"Flask: Unexpected error: {e}")
         return None
 
@@ -216,13 +216,13 @@ def login():
 
     # Check admin credentials first
     if email == admin_email and password == admin_password:
-        print(f"[v0] Admin login successful for {email}")
+        print(f" Admin login successful for {email}")
         return jsonify({"message": "Login berhasil", "role": "admin"}), 200
 
     # Check user credentials from database
     conn = get_db_connection()
     if conn is None:
-        print(f"[v0] Database connection failed for user {email}")
+        print(f" Database connection failed for user {email}")
         return jsonify({"error": "Tidak bisa konek ke database"}), 503
 
     cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -240,7 +240,7 @@ def login():
 
             try:
                 if hashed_password is None:
-                    print(f"[v0] No password found for user {email}")
+                    print(f" No password found for user {email}")
                     return jsonify({"message": "Email atau password salah"}), 401
                 
                 # Ensure password is properly encoded
@@ -252,37 +252,37 @@ def login():
                 else:
                     hashed_password_bytes = hashed_password
                 
-                print(f"[v0] Attempting login for user: {email}")
-                print(f"[v0] Password hash type: {type(hashed_password_bytes)}, Length: {len(hashed_password_bytes)}")
+                print(f" Attempting login for user: {email}")
+                print(f" Password hash type: {type(hashed_password_bytes)}, Length: {len(hashed_password_bytes)}")
                 
                 if bcrypt.checkpw(password_bytes, hashed_password_bytes):
-                    print(f"[v0] User login successful: {email}")
+                    print(f" User login successful: {email}")
                     return jsonify({
                         "message": "Login berhasil",
                         "role": "user",
                         "nama": nama
                     }), 200
                 else:
-                    print(f"[v0] Password mismatch for user: {email}")
+                    print(f"Password mismatch for user: {email}")
                     return jsonify({"message": "Email atau password salah"}), 401
             except ValueError as ve:
-                print(f"[v0] Bcrypt ValueError for {email}: {str(ve)}")
+                print(f"Bcrypt ValueError for {email}: {str(ve)}")
                 app.logger.error(f"Bcrypt ValueError: {str(ve)}")
                 return jsonify({"message": "Email atau password salah"}), 401
             except Exception as e:
-                print(f"[v0] Password verification error for {email}: {str(e)}")
+                print(f"Password verification error for {email}: {str(e)}")
                 app.logger.error(f"Password verification error: {str(e)}")
                 return jsonify({"message": "Email atau password salah"}), 401
         else:
-            print(f"[v0] User not found: {email}")
+            print(f"User not found: {email}")
             return jsonify({"message": "Email atau password salah"}), 401
 
     except psycopg2.Error as db_err:
-        print(f"[v0] Database query error: {str(db_err)}")
+        print(f"Database query error: {str(db_err)}")
         app.logger.error(f"Database query error: {str(db_err)}")
         return jsonify({"error": f"Database error: {str(db_err)}"}), 500
     except Exception as e:
-        print(f"[v0] Unexpected error in login: {str(e)}")
+        print(f"Unexpected error in login: {str(e)}")
         app.logger.error(f"Unexpected error in login: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
     finally:
