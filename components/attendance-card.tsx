@@ -147,7 +147,7 @@ export function AttendanceCard({ data, onReset }: AttendanceCardProps) {
                   <IdCard className="h-7 w-7 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-purple-600 dark:text-purple-400 mb-1">NIP</p>
+                  <p className="text-sm font-medium text-purple-600 dark:text-purple-400 mb-1">NIM</p>
                   <p className="text-lg font-mono font-bold text-gray-900 dark:text-white truncate">
                     {data.nip || "Tidak tersedia"}
                   </p>

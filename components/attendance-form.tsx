@@ -13,18 +13,7 @@ export function AttendanceForm({ onSuccess, onError, onLoading }: AttendanceForm
   const [captureStatus, setCaptureStatus] = useState<"idle" | "capturing" | "processing">("idle")
   const { toast } = useToast()
 
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371000
-    const dLat = (lat2 - lat1) * (Math.PI / 180)
-    const dLon = (lon2 - lon1) * (Math.PI / 180)
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(lat1 * (Math.PI / 180)) *
-        Math.cos(lat2 * (Math.PI / 180)) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2)
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-    return R * c
-  }
+  // FUNGSI calculateDistance DIHAPUS
 
   const handleCapture = async (imageSrc: string | null) => {
     if (!imageSrc) {
@@ -43,88 +32,46 @@ export function AttendanceForm({ onSuccess, onError, onLoading }: AttendanceForm
 
     toast({
       title: "Memproses Absensi",
-      description: "Sedang memverifikasi identitas dan lokasi...",
+      description: "Sedang memverifikasi wajah...", // Deskripsi diubah (tidak ada lokasi)
       duration: 2000,
     })
 
-    const officeLat = parseFloat(process.env.NEXT_PUBLIC_OFFICE_LAT || "0");
-    const officeLng = parseFloat(process.env.NEXT_PUBLIC_OFFICE_LNG || "0");
-    const maxDistanceMeters = parseInt(process.env.NEXT_PUBLIC_MAX_DISTANCE_METERS || "1200000000");
-
+    // LOGIKA GEOLOCATION & RADIUS DIHAPUS
 
     try {
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          try {
-            const { latitude, longitude } = pos.coords
-            const distance = calculateDistance(latitude, longitude, officeLat, officeLng)
+      // Langsung panggil API.
+      // Kita kirim 0, 0 sebagai koordinat dummy karena lokasi tidak lagi dipakai.
+      const response = await markAttendance(imageSrc, 0, 0)
 
-            if ( distance > maxDistanceMeters) {
-              toast({
-                title: "Di Luar Area Kantor",
-                description: `Absensi hanya bisa dilakukan dalam radius ${maxDistanceMeters} meter dari kantor.`,
-                variant: "destructive",
-              })
-              onError("Lokasi di luar radius kantor.")
-              return
-            }
+      if (response.success) {
+        console.log("✅ Respons Berhasil:", response)
 
-            const response = await markAttendance(imageSrc, latitude, longitude)
+        toast({
+          title: "Absensi Berhasil! ✨",
+          description: `Selamat datang, ${response.nama || "Karyawan"}!`,
+          variant: "default",
+          duration: 5000,
+        })
 
-            if (response.success) {
-              console.log("✅ Respons Berhasil:", response)
-
-              toast({
-                title: "Absensi Berhasil! ✨",
-                description: `Selamat datang, ${response.nama || "Karyawan"}!`,
-                variant: "default",
-                duration: 5000,
-              })
-
-              onSuccess({
-                success: true,
-                nip: response.nip || "",
-                nama: response.nama || "",
-                timestamp: response.timestamp || new Date().toISOString(),
-                message: response.message || "Absensi berhasil dicatat!",
-                image: imageSrc,
-              })
-            } else {
-              throw new Error(response.message || "Gagal mencatat absensi")
-            }
-          } catch (err: any) {
-            toast({
-              title: "Gagal Absensi",
-              description: err.message,
-              variant: "destructive",
-            })
-            onError(err.message)
-          } finally {
-            setIsSubmitting(false)
-            setCaptureStatus("idle")
-            onLoading(false)
-          }
-        },
-        (err) => {
-          toast({
-            title: "Gagal Mengakses Lokasi",
-            description: "Izinkan akses lokasi untuk melakukan absensi.",
-            variant: "destructive",
-          })
-          onError("Gagal mendapatkan lokasi.")
-          setIsSubmitting(false)
-          setCaptureStatus("idle")
-          onLoading(false)
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      )
-    } catch (error: any) {
+        onSuccess({
+          success: true,
+          nip: response.nip || "",
+          nama: response.nama || "",
+          timestamp: response.timestamp || new Date().toISOString(),
+          message: response.message || "Absensi berhasil dicatat!",
+          image: imageSrc,
+        })
+      } else {
+        throw new Error(response.message || "Gagal mencatat absensi")
+      }
+    } catch (err: any) {
       toast({
-        title: "Kesalahan Umum",
-        description: "Terjadi kesalahan saat memproses absensi.",
+        title: "Gagal Absensi",
+        description: err.message,
         variant: "destructive",
       })
-      onError("Terjadi kesalahan saat absensi.")
+      onError(err.message)
+    } finally {
       setIsSubmitting(false)
       setCaptureStatus("idle")
       onLoading(false)

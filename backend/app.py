@@ -6,34 +6,57 @@ import cv2
 import numpy as np
 import os
 import re
-import face_recognition
 import bcrypt
-
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 
+# --- LIBRARY BARU: INSIGHTFACE (MOBILEFACENET) ---
+from insightface.app import FaceAnalysis
+from numpy.linalg import norm
+
 load_dotenv()
 
-# Inisialisasi Flask app
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# ==========================================
+# 1. INISIALISASI MODEL MOBILEFACENET
+# ==========================================
+print("⏳ Sedang memuat model MobileFaceNet (InsightFace)...")
+# 'buffalo_s' adalah paket ringan berisi MobileFaceNet (Recognition) + SCRFD (Detection)
+# ctx_id=-1 artinya menggunakan CPU (Ubah ke 0 jika pakai GPU NVIDIA)
+app_face = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
+app_face.prepare(ctx_id=-1, det_size=(640, 640))
+print("✅ Model MobileFaceNet berhasil dimuat!")
+
+# ==========================================
+# 2. FUNGSI MATEMATIKA (COSINE SIMILARITY)
+# ==========================================
+def compute_similarity(feat1, feat2):
+    """
+    Menghitung kemiripan antara dua wajah.
+    MobileFaceNet menggunakan Cosine Similarity.
+    Range output: -1.0 s/d 1.0 (Semakin mendekati 1.0, semakin mirip).
+    """
+    feat1 = feat1.ravel()
+    feat2 = feat2.ravel()
+    sim = np.dot(feat1, feat2) / (norm(feat1) * norm(feat2))
+    return sim
+
+# ==========================================
+# 3. KONEKSI DATABASE
+# ==========================================
 def get_db_connection():
     try:
-        # Prioritize DATABASE_URL for Neon, fallback to individual DB config variables
         database_url = os.environ.get("DATABASE_URL")
         
         if database_url:
-            # Parse Neon connection string
-            print(f"Connecting to Neon database...")
+            # print(f"Connecting to Neon database...")
             conn = psycopg2.connect(database_url, connect_timeout=5)
-            print(f"Successfully connected to Neon database")
         else:
-            # Fallback to localhost configuration
             def strip_quotes(value):
-                """Remove surrounding quotes from environment variable values"""
                 if value and len(value) >= 2 and value[0] == '"' and value[-1] == '"':
                     return value[1:-1]
                 if value and len(value) >= 2 and value[0] == "'" and value[-1] == "'":
@@ -45,7 +68,7 @@ def get_db_connection():
             DB_USER = strip_quotes(os.environ.get("DB_USER", "postgres"))
             DB_PASS = strip_quotes(os.environ.get("DB_PASS", "password"))
             
-            print(f"Connecting to localhost: {DB_HOST}:{DB_NAME} with user {DB_USER}")
+            # print(f"Connecting to localhost: {DB_HOST}:{DB_NAME} with user {DB_USER}")
             conn = psycopg2.connect(
                 host=DB_HOST, 
                 database=DB_NAME, 
@@ -65,12 +88,11 @@ def get_db_connection():
         app.logger.error(f"Flask: Unexpected error: {e}")
         return None
 
-def sanitize_filename(name):
-    name = re.sub(r'[^\w\s-]', '', name).strip()
-    name = re.sub(r'[-\s]+', '_', name)
-    return name.lower()
+# ==========================================
+# 4. ENDPOINT UTAMA
+# ==========================================
 
-# --- Endpoint absensi ---
+# --- Endpoint Absensi (MobileFaceNet) ---
 @app.route('/attendance', methods=['POST'])
 def attendance():
     data = request.get_json()
@@ -79,6 +101,7 @@ def attendance():
         return jsonify({'error': 'No image provided'}), 400
 
     try:
+        # 1. Decode Gambar Base64
         image_b64 = data['image'].split(',')[-1]
         image_data = base64.b64decode(image_b64)
         np_arr = np.frombuffer(image_data, np.uint8)
@@ -87,75 +110,86 @@ def attendance():
         if image_cv2 is None:
             return jsonify({'error': 'Invalid image data'}), 400
 
-        # Deteksi wajah pada gambar yang baru diterima
-        current_face_locations = face_recognition.face_locations(image_cv2)
-        if not current_face_locations:
-            return jsonify({'error': 'No face detected in current image'}), 404
-
-        current_face_encodings = face_recognition.face_encodings(image_cv2, current_face_locations)
-        if not current_face_encodings:
-            return jsonify({'error': 'Could not create encoding for the current image'}), 400
+        # 2. Deteksi & Ekstraksi Fitur dengan MobileFaceNet
+        faces = app_face.get(image_cv2)
         
-        current_face_encoding = current_face_encodings[0]
+        if len(faces) == 0:
+            return jsonify({'error': 'Wajah tidak terdeteksi. Harap posisi wajah tegak lurus.'}), 404
+        
+        # Ambil wajah pertama (yang paling dominan/besar score-nya)
+        current_face_emb = faces[0].embedding
 
-        # Ambil data wajah dari Database
+        # 3. Ambil Data Karyawan dari Database
         conn = get_db_connection()
         if conn is None:
-            return jsonify({'error': 'Flask: Could not connect to database for attendance.'}), 503
+            return jsonify({'error': 'Database connection failed'}), 503
         
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        known_face_encodings_from_db = []
-        known_nips_from_db = []
-        known_names_from_db = []
 
         try:
             cursor.execute("SELECT nip, nama, face_embedding FROM \"Karyawan\" WHERE face_embedding IS NOT NULL")
-            all_karyawan_with_embeddings = cursor.fetchall()
+            all_karyawan = cursor.fetchall()
 
-            for row in all_karyawan_with_embeddings:
+            if not all_karyawan:
+                 return jsonify({'error': 'Database wajah kosong. Harap registrasi wajah dulu.'}), 404
+
+            max_similarity = -1.0
+            best_match_user = None
+
+            # --- THRESHOLD (AMBANG BATAS) ---
+            # Untuk MobileFaceNet, 0.5 adalah angka yang seimbang.
+            # < 0.4 : Terlalu ketat (susah absen)
+            # > 0.6 : Terlalu longgar (bisa salah orang)
+            THRESHOLD = 0.5 
+
+            # 4. Loop Pencocokan (Matching)
+            for user in all_karyawan:
                 try:
-                    str_encoding = row['face_embedding']
-                    float_list = [float(x) for x in str_encoding.strip('[]').split(',')]
-                    known_face_encodings_from_db.append(np.array(float_list))
-                    known_nips_from_db.append(row['nip'])
-                    known_names_from_db.append(row['nama'])
-                except (ValueError, TypeError) as e:
-                    app.logger.warning(f"Flask: Skipping NIP {row['nip']} due to parsing error in face_embedding: {e}")
+                    str_encoding = user['face_embedding']
+                    # Bersihkan format string dan convert ke Numpy Array
+                    # Asumsi format di DB: "[0.123, -0.456, ...]"
+                    clean_str = str_encoding.strip().replace('\n', '')
+                    db_emb_list = [float(x) for x in clean_str.strip('[]').split(',')]
+                    db_emb_np = np.array(db_emb_list)
+
+                    # Hitung Skor Kemiripan
+                    sim = compute_similarity(current_face_emb, db_emb_np)
+
+                    if sim > max_similarity:
+                        max_similarity = sim
+                        best_match_user = user
+
+                except Exception as e:
+                    # Skip jika ada data corrupt di DB
                     continue
             
-            if not known_face_encodings_from_db:
-                 return jsonify({'error': 'No known faces with valid embeddings found in database'}), 404
-
-            # Lakukan perbandingan
-            matches = face_recognition.compare_faces(known_face_encodings_from_db, current_face_encoding, tolerance=0.5)
-            distances = face_recognition.face_distance(known_face_encodings_from_db, current_face_encoding)
-
-            if len(distances) == 0:
-                return jsonify({'error': 'Face distance calculation failed or no known faces to compare against.'}), 500
-
-            best_match_index = np.argmin(distances)
-            if matches[best_match_index]:
+            # 5. Keputusan Akhir
+            if max_similarity > THRESHOLD and best_match_user:
                 return jsonify({
                     'message': 'Face recognized',
-                    'name': known_names_from_db[best_match_index],
-                    'nip': known_nips_from_db[best_match_index]
+                    'name': best_match_user['nama'],
+                    'nip': best_match_user['nip'],
+                    'similarity': float(max_similarity) # Opsional: untuk debug
                 }), 200
             else:
-                return jsonify({'error': 'Face not recognized'}), 404
+                return jsonify({
+                    'error': 'Wajah tidak dikenali', 
+                    'similarity': float(max_similarity)
+                }), 404
 
         except psycopg2.Error as db_err:
-            app.logger.error(f"Flask: Database error during attendance check: {str(db_err)}")
-            return jsonify({'error': f'Flask Database error: {str(db_err)}'}), 500
+            app.logger.error(f"Flask DB Error: {str(db_err)}")
+            return jsonify({'error': f'Database error: {str(db_err)}'}), 500
         finally:
             if conn:
                 cursor.close()
                 conn.close()
 
     except Exception as e:
-        app.logger.error(f"Flask: Error in /attendance endpoint: {str(e)}")
+        app.logger.error(f"Flask Error: {str(e)}")
         return jsonify({'error': f'Internal server error: {str(e)}'}), 500
 
-# --- Endpoint pendaftaran wajah ---
+# --- Endpoint Pendaftaran Wajah (MobileFaceNet) ---
 @app.route('/register-face', methods=['POST'])
 def register_face():
     data = request.get_json()
@@ -165,38 +199,41 @@ def register_face():
 
     try:
         image_b64_data_url = data['fotoWajah']
+        if ',' in image_b64_data_url:
+            header, image_b64 = image_b64_data_url.split(',', 1)
+        else:
+            image_b64 = image_b64_data_url
 
-        if ',' not in image_b64_data_url:
-            return jsonify({'error': 'Format data URL gambar tidak valid'}), 400
-
-        header, image_b64 = image_b64_data_url.split(',', 1)
         image_data = base64.b64decode(image_b64)
         np_arr = np.frombuffer(image_data, np.uint8)
         image_cv2 = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
         if image_cv2 is None:
-            return jsonify({'error': 'Gagal decode gambar (Flask)'}), 400
+            return jsonify({'error': 'Gagal decode gambar'}), 400
 
-        face_locations = face_recognition.face_locations(image_cv2)
-        if not face_locations:
-            return jsonify({'error': 'Tidak ada wajah terdeteksi (Flask)'}), 400
-        if len(face_locations) > 1:
-            return jsonify({'error': 'Terdeteksi lebih dari satu wajah. Harap gunakan foto satu wajah.'}), 400
+        # --- DETEKSI DENGAN MOBILEFACENET ---
+        faces = app_face.get(image_cv2)
 
-        # Dapatkan face encoding
-        face_encoding_array = face_recognition.face_encodings(image_cv2, face_locations)[0]
-        face_encoding_list = [float(val) for val in face_encoding_array]
+        if len(faces) == 0:
+            return jsonify({'error': 'Wajah tidak terdeteksi. Pastikan pencahayaan cukup.'}), 400
+        
+        if len(faces) > 1:
+            return jsonify({'error': 'Terdeteksi lebih dari satu wajah. Gunakan foto selfie sendiri.'}), 400
+
+        # Ambil embedding (512 dimensi)
+        # Convert ke list Python biasa agar bisa disimpan sebagai JSON/String di DB
+        face_encoding_list = faces[0].embedding.tolist()
 
         return jsonify({
             'face_encoding': face_encoding_list,
-            'message': 'Wajah berhasil dikenali dan diencode'
+            'message': 'Wajah berhasil diproses dengan MobileFaceNet'
         }), 200
 
     except Exception as e:
-        app.logger.error(f"Flask error di /register-face: {str(e)}")
+        app.logger.error(f"Register Error: {str(e)}")
         return jsonify({'error': f'Flask error: {str(e)}'}), 500
 
-# --- Endpoint Login ---
+# --- Endpoint Login (Tidak Berubah) ---
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -204,7 +241,6 @@ def login():
     password = data.get('password')
 
     def strip_quotes(value):
-        """Remove surrounding quotes from environment variable values"""
         if value and len(value) >= 2 and value[0] == '"' and value[-1] == '"':
             return value[1:-1]
         if value and len(value) >= 2 and value[0] == "'" and value[-1] == "'":
@@ -214,92 +250,54 @@ def login():
     admin_email = strip_quotes(os.getenv('ADMIN_EMAIL', ''))
     admin_password = strip_quotes(os.getenv('ADMIN_PASSWORD', ''))
 
-    # Check admin credentials first
+    # Check admin
     if email == admin_email and password == admin_password:
-        print(f" Admin login successful for {email}")
         return jsonify({"message": "Login berhasil", "role": "admin"}), 200
 
-    # Check user credentials from database
+    # Check user
     conn = get_db_connection()
     if conn is None:
-        print(f" Database connection failed for user {email}")
         return jsonify({"error": "Tidak bisa konek ke database"}), 503
 
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        # Query user from Karyawan table
-        cursor.execute("""
-            SELECT nama, password, email FROM public."Karyawan"
-            WHERE email = %s
-        """, (email,))
+        cursor.execute('SELECT nama, password, email FROM public."Karyawan" WHERE email = %s', (email,))
         row = cursor.fetchone()
 
         if row:
             nama = row['nama']
             hashed_password = row['password']
-
             try:
                 if hashed_password is None:
-                    print(f" No password found for user {email}")
                     return jsonify({"message": "Email atau password salah"}), 401
                 
-                # Ensure password is properly encoded
                 password_bytes = password.encode('utf-8')
-                
-                # Handle both string and bytes password hashes
                 if isinstance(hashed_password, str):
                     hashed_password_bytes = hashed_password.encode('utf-8')
                 else:
                     hashed_password_bytes = hashed_password
                 
-                print(f" Attempting login for user: {email}")
-                print(f" Password hash type: {type(hashed_password_bytes)}, Length: {len(hashed_password_bytes)}")
-                
                 if bcrypt.checkpw(password_bytes, hashed_password_bytes):
-                    print(f" User login successful: {email}")
-                    return jsonify({
-                        "message": "Login berhasil",
-                        "role": "user",
-                        "nama": nama
-                    }), 200
+                    return jsonify({"message": "Login berhasil", "role": "user", "nama": nama}), 200
                 else:
-                    print(f"Password mismatch for user: {email}")
                     return jsonify({"message": "Email atau password salah"}), 401
-            except ValueError as ve:
-                print(f"Bcrypt ValueError for {email}: {str(ve)}")
-                app.logger.error(f"Bcrypt ValueError: {str(ve)}")
-                return jsonify({"message": "Email atau password salah"}), 401
             except Exception as e:
-                print(f"Password verification error for {email}: {str(e)}")
-                app.logger.error(f"Password verification error: {str(e)}")
                 return jsonify({"message": "Email atau password salah"}), 401
         else:
-            print(f"User not found: {email}")
             return jsonify({"message": "Email atau password salah"}), 401
 
-    except psycopg2.Error as db_err:
-        print(f"Database query error: {str(db_err)}")
-        app.logger.error(f"Database query error: {str(db_err)}")
-        return jsonify({"error": f"Database error: {str(db_err)}"}), 500
     except Exception as e:
-        print(f"Unexpected error in login: {str(e)}")
-        app.logger.error(f"Unexpected error in login: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
     finally:
         cursor.close()
         conn.close()
 
-# --- Health check endpoint ---
+# --- Health check ---
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'OK', 'message': 'Flask server is running'}), 200
+    return jsonify({'status': 'OK', 'message': 'Flask server with MobileFaceNet is running'}), 200
 
-# --- Jalankan server ---
 if __name__ == '__main__':
     print("Starting Flask server...")
-    print("Available endpoints:")
-    print("- POST /attendance - Face recognition attendance")
-    print("- POST /register-face - Register new face")
-    print("- POST /api/login - User login")
-    print("- GET /health - Health check")
+    print("Endpoints: /attendance, /register-face, /api/login")
     app.run(host='0.0.0.0', port=5000, debug=True)

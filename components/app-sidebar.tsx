@@ -72,11 +72,11 @@ export function AppSidebar() {
                     </div>
                     <div className="min-w-0 flex-1">
                         <h2 className="text-base lg:text-lg font-bold text-gray-900 dark:text-white truncate">Admin Dashboard</h2>
-                        <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium truncate">MAS Al Ittihadiyah</p>
+                        <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium truncate">Computer Vision</p>
                     </div>
                 </div>
             </SidebarHeader>
-
+        
             <SidebarContent className="bg-transparent flex-1 overflow-y-auto">
                 <SidebarGroup>
                     <SidebarGroupLabel className="text-emerald-700 dark:text-emerald-300 font-semibold px-4 py-2">

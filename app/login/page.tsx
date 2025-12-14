@@ -184,9 +184,9 @@ export default function LoginPage() {
                                 </div>
 
                                 <div className="space-y-3">
-                                    <h1 className="text-3xl font-bold leading-tight">Madrasah Aliyah Swasta</h1>
+                                    <h1 className="text-3xl font-bold leading-tight">Computer Vision</h1>
                                     <h2 className="text-4xl font-extrabold bg-gradient-to-r from-white to-emerald-100 bg-clip-text text-transparent">
-                                        Al Ittihadiyah
+                                      Universitas Sumatera Utara
                                     </h2>
                                     <h3 className="text-2xl font-semibold text-emerald-100">Medan</h3>
                                 </div>

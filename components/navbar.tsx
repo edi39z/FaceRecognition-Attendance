@@ -53,7 +53,7 @@ export function Navbar() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-gray-900 dark:text-white">Face Attendance</h1>
-            <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">MAS Al Ittihadiyah</p>
+            <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">Computer Vision USU</p>
           </div>
         </Link>
 
